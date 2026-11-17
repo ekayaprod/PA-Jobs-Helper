@@ -206,7 +206,7 @@ javascript:(async function() {
     },
 
     getQNodes(context = document) {
-      const scoped = context.querySelectorAll(".supplementary-questions .question-item, .box .question-item");
+      const scoped = context.querySelectorAll(".supplementary-questions .question-item, .agencywide-questions .question-item, .box .question-item");
       return Array.from(scoped.length ? scoped : context.querySelectorAll(".question-item"));
     },
     padQ(qNum) {
@@ -217,8 +217,16 @@ javascript:(async function() {
       const m = idxNode && idxNode.textContent ? idxNode.textContent.match(/\d+/) : null;
       return m ? parseInt(m[0], 10) : (idx + 1);
     },
-    getQKey(qEl, idx) {
-      return this.padQ(this.getQNum(qEl, idx));
+    getQKey(qEl, idx, context = document) {
+      const isAgency = qEl.closest(".agencywide-questions") !== null;
+      const prefix = isAgency ? "A" : "Q";
+      
+      const groupNodes = Array.from(context.querySelectorAll(isAgency ? ".agencywide-questions .question-item" : ".supplementary-questions .question-item, .box .question-item:not(.agencywide-questions .question-item)"));
+      const localIdx = groupNodes.indexOf(qEl);
+      
+      const qNum = this.getQNum(qEl, localIdx !== -1 ? localIdx : idx);
+      
+      return prefix + String(qNum).padStart(2, "0");
     },
     getQText(qEl, fallback = "") {
       const tEl = qEl.querySelector(".question-container > span, .question-text span, .question-text label");
@@ -242,8 +250,9 @@ javascript:(async function() {
       const sQ = new Set();
       const qMetaList = [];
       const nodes = this.getQNodes(context);
+      
       nodes.forEach((qEl, idx) => {
-        const qKey = this.getQKey(qEl, idx);
+        const qKey = this.getQKey(qEl, idx, context);
         if (sQ.has(qKey)) return;
         sQ.add(qKey);
         const t = this.getQText(qEl);
@@ -257,7 +266,7 @@ javascript:(async function() {
 
         if (!isMC && qMetaList.length > 0) {
           const prev = qMetaList[qMetaList.length - 1];
-          if (/above|previous question|selected|answered yes|your response|your selection|supports your|claimed/i.test(t)) {
+          if (prev.qKey.charAt(0) === qKey.charAt(0) && /above|previous question|selected|answered yes|your response|your selection|supports your|claimed/i.test(t)) {
             tags.push("[PAIRED WITH " + prev.qKey + "]");
           }
         }
@@ -278,7 +287,15 @@ javascript:(async function() {
           line: qKey + " " + tags.join(" ") + ": " + t + (ops.length ? "\n - " + ops.join("\n - ") : "")
         });
       });
-      return qMetaList.map(x => x.line).join("\n\n");
+      
+      const agencyQs = qMetaList.filter(x => x.qKey.startsWith("A")).map(x => x.line).join("\n\n");
+      const suppQs = qMetaList.filter(x => x.qKey.startsWith("Q")).map(x => x.line).join("\n\n");
+      
+      let out = "";
+      if (agencyQs) out += "### AGENCY QUESTIONS\n" + agencyQs + "\n\n";
+      if (suppQs) out += "### SUPPLEMENTAL QUESTIONS\n" + suppQs;
+      
+      return out.trim();
     },
 
     san(txt, morphStats = null) {
@@ -331,9 +348,15 @@ javascript:(async function() {
         }
         const normObj = {};
         for (const [k, v] of Object.entries(rawObj)) {
-          const m = String(k).match(/(\d+)/);
-          const cleanKey = m ? ("Q" + String(parseInt(m[1], 10)).padStart(2, "0")) : k.trim().toUpperCase();
-          normObj[cleanKey] = typeof v === "string" ? this.san(v, morphStats) : String(v ?? "");
+          const m = String(k).match(/([AQ])0*(\d+)/i);
+          if (m) {
+              const prefix = m[1].toUpperCase();
+              const num = parseInt(m[2], 10);
+              const cleanKey = prefix + String(num).padStart(2, "0");
+              normObj[cleanKey] = typeof v === "string" ? this.san(v, morphStats) : String(v ?? "");
+          } else {
+              normObj[k.trim().toUpperCase()] = typeof v === "string" ? this.san(v, morphStats) : String(v ?? "");
+          }
         }
         return { ok: true, data: normObj, morphStats };
       } catch (e) {
@@ -772,7 +795,7 @@ javascript:(async function() {
       "\n**Schedule/Loc:** " + m.fullSchedule +
       "\n\n### DESCRIPTION\n" + m.fullDuties +
       "\n\n### REQUIREMENTS\n" + m.fullReq +
-      (m.questions ? "\n\n### APPLICATION QUESTIONS\n" + m.questions : "");
+      (m.questions ? "\n\n" + m.questions : "");
   };
 
   const showJobDetail = (m, dt) => {
@@ -867,7 +890,7 @@ javascript:(async function() {
     };
 
     qNodes.forEach((qEl, idx) => {
-      const qKey = Ext.getQKey(qEl, idx);
+      const qKey = Ext.getQKey(qEl, idx, document);
       if (seen.has(qKey)) return;
       seen.add(qKey);
 
@@ -934,7 +957,7 @@ javascript:(async function() {
     const data = parseRes.data;
     let count = 0;
     Ext.getQNodes(document).forEach((qEl, idx) => {
-      const qKey = Ext.getQKey(qEl, idx);
+      const qKey = Ext.getQKey(qEl, idx, document);
       const answer = data[qKey];
       if (!answer) return;
       count += Ext.injAns(qEl, answer);
@@ -949,7 +972,7 @@ javascript:(async function() {
     if (q.length === 0) return alert("We couldn't find any supplemental questions. Please ensure you are on the Application Questions step.");
     const c = el("div", "", null, { class: "jc-flex-col" });
     const ta = el("textarea", "", c, { class: "jc-textarea", readonly: true, style: "flex:1;resize:none;overflow-y:auto;" });
-    ta.value = "### APPLICATION QUESTIONS\n\n" + Ext.q();
+    ta.value = Ext.q();
     initUI("PA Jobs Bookmark: Application Questions", "Copy these questions into your AI chat, or click Auto-Fill Answers once your answers are ready.", c, () => ta.value, [
       {
         text: "Auto-Fill Answers",
@@ -993,7 +1016,7 @@ javascript:(async function() {
       return [
         mStr,
         active.d && has.d && `### DESCRIPTION\n${d.ds}`,
-        active.q && has.q && `### APPLICATION QUESTIONS\n${d.q}`
+        active.q && has.q && `${d.q}`
       ].filter(Boolean).join("\n\n---\n\n");
     };
 
